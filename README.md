@@ -2,7 +2,6 @@
 
 Transform reactive chatbots into proactive research assistants through semantic interest analysis and autonomous research execution.
 
-[![Build Status](https://github.com/dr3am/dr3am/workflows/CI/badge.svg)](https://github.com/dr3am/dr3am/actions)
 [![Coverage Status](https://codecov.io/gh/dr3am/dr3am/branch/main/graph/badge.svg)](https://codecov.io/gh/dr3am/dr3am)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
