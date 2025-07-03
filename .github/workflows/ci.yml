@@ -1,0 +1,377 @@
+# CI/CD Pipeline for dr3am
+name: CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+env:
+  PYTHON_VERSION: "3.11"
+  POETRY_VERSION: "1.7.0"
+
+jobs:
+  # Code Quality and Security Checks
+  lint-and-security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements-dev.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+    
+    - name: Run Black (code formatting)
+      run: black --check --diff dr3am/ tests/
+    
+    - name: Run isort (import sorting)
+      run: isort --check-only --diff dr3am/ tests/
+    
+    - name: Run flake8 (linting)
+      run: flake8 dr3am/ tests/
+    
+    - name: Run mypy (type checking)
+      run: mypy dr3am/
+      continue-on-error: true  # Type checking is not blocking for now
+    
+    - name: Run bandit (security)
+      run: bandit -r dr3am/ -f json -o bandit-report.json
+      continue-on-error: true
+    
+    - name: Upload bandit results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: bandit-report
+        path: bandit-report.json
+    
+    - name: Run safety (dependency security)
+      run: safety check --json --output safety-report.json
+      continue-on-error: true
+    
+    - name: Upload safety results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: safety-report
+        path: safety-report.json
+
+  # Unit and Integration Tests
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-${{ matrix.python-version }}-pip-${{ hashFiles('requirements-dev.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.python-version }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+    
+    - name: Set up test environment
+      env:
+        DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/1
+        SECRET_KEY: test-secret-key-32-characters-long
+        ENVIRONMENT: testing
+      run: |
+        # Initialize test database
+        python -c "
+        from dr3am.models.database import init_database
+        init_database('$DATABASE_URL')
+        "
+    
+    - name: Run unit tests
+      env:
+        DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/1
+        SECRET_KEY: test-secret-key-32-characters-long
+        ENVIRONMENT: testing
+      run: |
+        pytest tests/unit/ -v --cov=dr3am --cov-report=xml --cov-report=term-missing
+    
+    - name: Run integration tests
+      env:
+        DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/1
+        SECRET_KEY: test-secret-key-32-characters-long
+        ENVIRONMENT: testing
+      run: |
+        pytest tests/integration/ -v --cov=dr3am --cov-append --cov-report=xml --cov-report=term-missing
+    
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: true
+
+  # API Tests
+  api-tests:
+    runs-on: ubuntu-latest
+    needs: [lint-and-security]
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+    
+    - name: Start dr3am server
+      env:
+        DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/1
+        SECRET_KEY: test-secret-key-32-characters-long
+        ENVIRONMENT: testing
+      run: |
+        # Initialize database
+        python -c "
+        from dr3am.models.database import init_database
+        init_database('$DATABASE_URL')
+        "
+        
+        # Start server in background
+        uvicorn dr3am.main:app --host 127.0.0.1 --port 8000 &
+        sleep 10
+    
+    - name: Run API tests
+      env:
+        API_BASE_URL: http://127.0.0.1:8000
+      run: |
+        pytest tests/api/ -v --tb=short
+    
+    - name: Test OpenAPI spec
+      run: |
+        curl -f http://127.0.0.1:8000/openapi.json > openapi.json
+        # Validate OpenAPI spec
+        python -c "
+        import json
+        with open('openapi.json') as f:
+            spec = json.load(f)
+        assert 'openapi' in spec
+        assert spec['info']['title'] == 'dr3am API'
+        print('OpenAPI spec is valid')
+        "
+
+  # Docker Build and Test
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [test]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Cache Docker layers
+      uses: actions/cache@v3
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+    
+    - name: Build development image
+      run: |
+        docker build --target development -t dr3am:dev .
+    
+    - name: Build production image
+      run: |
+        docker build --target production -t dr3am:prod .
+    
+    - name: Test production image
+      run: |
+        # Start services with docker-compose
+        docker-compose -f docker-compose.test.yml up --abort-on-container-exit
+    
+    - name: Run container security scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'dr3am:prod'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Load Testing
+  load-test:
+    runs-on: ubuntu-latest
+    needs: [api-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        pip install locust
+    
+    - name: Start test environment
+      run: |
+        docker-compose up -d
+        sleep 30
+    
+    - name: Run load tests
+      run: |
+        # Create a simple load test
+        cat > locustfile.py << 'EOF'
+        from locust import HttpUser, task, between
+        
+        class Dr3amUser(HttpUser):
+            wait_time = between(1, 3)
+            
+            @task
+            def health_check(self):
+                self.client.get("/health")
+            
+            @task(3)
+            def root_endpoint(self):
+                self.client.get("/")
+        EOF
+        
+        # Run load test
+        locust -f locustfile.py --headless -u 10 -r 2 -t 60s --host=http://localhost:8000
+
+  # Deploy to Staging
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [docker-build, load-test]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to staging
+      run: |
+        echo "Deploying to staging environment..."
+        # Add actual deployment steps here
+        # For example: kubectl apply, docker push, etc.
+
+  # Deploy to Production
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    if: github.event_name == 'release'
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to production
+      run: |
+        echo "Deploying to production environment..."
+        # Add actual production deployment steps here
+
+  # Cleanup
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: always()
+    
+    steps:
+    - name: Clean up test artifacts
+      run: |
+        echo "Cleaning up test artifacts..."
+        # Add cleanup steps if needed

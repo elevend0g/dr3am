@@ -1,0 +1,59 @@
+# Testing docker-compose configuration
+version: '3.8'
+
+services:
+  dr3am-test:
+    build:
+      context: .
+      target: testing
+    container_name: dr3am-test
+    environment:
+      - ENVIRONMENT=testing
+      - DEBUG=true
+      - DATABASE_URL=postgresql://test_user:test_password@postgres-test:5432/test_db
+      - REDIS_URL=redis://redis-test:6379/1
+      - LOG_LEVEL=DEBUG
+      - SECRET_KEY=test-secret-key-32-characters-long
+    depends_on:
+      - postgres-test
+      - redis-test
+    networks:
+      - dr3am-test-network
+    volumes:
+      - .:/app
+      - ./test-results:/app/test-results
+    command: >
+      sh -c "
+        sleep 5 &&
+        python -m pytest tests/ 
+        --cov=dr3am 
+        --cov-report=html:/app/test-results/htmlcov 
+        --cov-report=xml:/app/test-results/coverage.xml 
+        --junitxml=/app/test-results/junit.xml 
+        -v
+      "
+
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: dr3am-postgres-test
+    environment:
+      - POSTGRES_DB=test_db
+      - POSTGRES_USER=test_user
+      - POSTGRES_PASSWORD=test_password
+    tmpfs:
+      - /var/lib/postgresql/data:noexec,nosuid,size=200m
+    networks:
+      - dr3am-test-network
+
+  redis-test:
+    image: redis:7-alpine
+    container_name: dr3am-redis-test
+    tmpfs:
+      - /data:noexec,nosuid,size=100m
+    networks:
+      - dr3am-test-network
+    command: redis-server --save ""
+
+networks:
+  dr3am-test-network:
+    driver: bridge

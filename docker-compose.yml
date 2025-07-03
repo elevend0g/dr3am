@@ -1,0 +1,97 @@
+# Development docker-compose configuration
+version: '3.8'
+
+services:
+  dr3am:
+    build:
+      context: .
+      target: development
+    container_name: dr3am-dev
+    ports:
+      - "8000:8000"
+      - "9090:9090"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - DATABASE_URL=postgresql://dr3am:dr3am_dev_password@postgres:5432/dr3am_dev
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=DEBUG
+      - LOG_TO_CONSOLE=true
+      - LOG_FORMAT=text
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - dr3am-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: dr3am-postgres-dev
+    environment:
+      - POSTGRES_DB=dr3am_dev
+      - POSTGRES_USER=dr3am
+      - POSTGRES_PASSWORD=dr3am_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - dr3am-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: dr3am-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_dev_data:/data
+    networks:
+      - dr3am-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # Development database admin
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: dr3am-pgadmin-dev
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@dr3am.local
+      - PGADMIN_DEFAULT_PASSWORD=admin123
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_dev_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - dr3am-network
+    restart: unless-stopped
+
+  # Redis admin
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: dr3am-redis-commander-dev
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - dr3am-network
+    restart: unless-stopped
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:
+  pgadmin_dev_data:
+
+networks:
+  dr3am-network:
+    driver: bridge
